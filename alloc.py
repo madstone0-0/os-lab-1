@@ -43,7 +43,6 @@ LEAST_USED_BLOCK = "Least Used Block"
 MAX_INTERNAL_FRAG = "Maximum Internal Fragmentation"
 
 
-
 class Alloc:
     def __init__(self, sizes: list[int]) -> None:
         self.freeList: set[int] = set()
