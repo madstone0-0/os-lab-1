@@ -148,7 +148,7 @@ class Anim:
                 self.tickTimer = t0
 
             if len(self.jobs) != 0 and t0 - self.tickTimer < 50:
-                job = self.jobs.pop()
+                job = self.jobs.popleft()
                 if self.scheme == 1:
                     alloced = self.alloc.bestFit(self.tick, job)
                 else:
