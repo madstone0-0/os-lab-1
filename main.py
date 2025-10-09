@@ -5,10 +5,6 @@ from alloc import Alloc, makeJobQueue, Block, Job
 from collections import defaultdict
 
 pg.init()
-# SCREEN_HEIGHT = pg.display.Info().current_h
-# SCREEN_WIDTH = pg.display.Info().current_w
-# BOUND_HEIGHT = SCREEN_HEIGHT
-# BOUND_WIDTH = SCREEN_WIDTH - 400
 
 SCREEN_HEIGHT = 600
 SCREEN_WIDTH = 800
@@ -23,6 +19,9 @@ schemes = ["First Fit", "Best Fit"]
 
 class Anim:
     def reset(self) -> None:
+        """
+        Reset the animation state to initial values.
+        """
         self.running = True
         self.simRunning = True
         self.displayTick = 0
@@ -113,6 +112,9 @@ class Anim:
         self.reset()
 
     def handleEvents(self):
+        """
+        Handle user input events.
+        """
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 self.running = False
@@ -121,6 +123,9 @@ class Anim:
                     self.simRunning = not self.simRunning
 
     def drawInitialRAM(self):
+        """
+        Compute the positions for RAM blocks and store them in self.ramRects.
+        """
         self.ramRects = []
         y = SCREEN_HEIGHT - BOUND_HEIGHT  # start at top of RAM region
         height = BOUND_HEIGHT // len(self.alloc.ram)
@@ -132,15 +137,19 @@ class Anim:
             y += height  # move downward
 
     def relayoutWaitingJobs(self):
-        """Recompute positions for waiting jobs."""
+        """Compute the positions for waiting jobs and store them in self.waitingJobRects."""
         self.waitingJobRects = {}
         y = SCREEN_HEIGHT - BOUND_HEIGHT + 10
+        # Collect jobs from both waiting and rejected lists
         for job in [*self.jobs, *self.rejectedList]:
             rect = pg.Rect(10, y, (BOUND_WIDTH // 2) - 20, self.jobHeight)
             self.waitingJobRects[job.id] = (rect, job)
             y += self.jobHeight
 
     def update(self):
+        """
+        Update the simulation state.
+        """
         if self.simRunning:
             t0 = pg.time.get_ticks()
 
@@ -148,6 +157,7 @@ class Anim:
                 self.tick += 1
                 self.tickTimer = t0
 
+            # While the job queue is not empty and we are within 50ms of the last tick update
             if len(self.jobs) != 0 and t0 - self.tickTimer < 50:
                 job = self.jobs.popleft()
                 if self.scheme == 1:
@@ -156,13 +166,17 @@ class Anim:
                     alloced = self.alloc.firstFit(self.tick, job)
 
                 if not alloced:
+                    # If allocation failed and allocation is still possible, re-add the job to the back of the queue
                     if self.alloc.canAllocate(job):
                         self.jobs.appendleft(job)
+                    # Else add to rejected list
                     else:
                         self.rejectedList.add(job)
 
+            # If deallocation is possible, deallocate
             self.alloc.deallocate(self.tick)
 
+            # Update status
             self.schemeText = self.font.render(
                 f"Scheme: {schemes[self.scheme]}", True, (0, 0, 0)
             )
