@@ -1,7 +1,7 @@
-from typing import Any
+from typing import Any, Set
 import pygame as pg
 from pygame.locals import *
-from alloc import Alloc, makeJobQueue, Block
+from alloc import Alloc, makeJobQueue, Block, Job
 from collections import defaultdict
 
 pg.init()
@@ -53,7 +53,7 @@ class Anim:
                 (7, 7540),
                 (3, 3210),
                 (1, 1380),
-                # (9, 9850),
+                (9, 9850),
                 (3, 3610),
                 (7, 7540),
                 (2, 2710),
@@ -79,6 +79,7 @@ class Anim:
         self.ramRects: list[tuple[pg.Rect, Block]] = []
         self.waitingJobRects: dict[int, tuple[pg.Rect, Any]] = {}
         self.jobHeight = BOUND_HEIGHT // max(1, len(self.jobs))
+        self.rejectedList: Set[Job] = set()
         self.drawInitialRAM()
         self.relayoutWaitingJobs()
 
@@ -131,10 +132,10 @@ class Anim:
             y += height  # move downward
 
     def relayoutWaitingJobs(self):
-        """Recompute positions for waiting jobs (simple left-to-right layout)."""
+        """Recompute positions for waiting jobs."""
         self.waitingJobRects = {}
         y = SCREEN_HEIGHT - BOUND_HEIGHT + 10
-        for i, job in enumerate(self.jobs):
+        for job in [*self.jobs, *self.rejectedList]:
             rect = pg.Rect(10, y, (BOUND_WIDTH // 2) - 20, self.jobHeight)
             self.waitingJobRects[job.id] = (rect, job)
             y += self.jobHeight
@@ -155,7 +156,10 @@ class Anim:
                     alloced = self.alloc.firstFit(self.tick, job)
 
                 if not alloced:
-                    self.jobs.appendleft(job)
+                    if self.alloc.canAllocate(job):
+                        self.jobs.appendleft(job)
+                    else:
+                        self.rejectedList.add(job)
 
             self.alloc.deallocate(self.tick)
 
@@ -248,8 +252,8 @@ class Anim:
 
             self.screen.blit(label, (int(lx), int(ly)))
 
-        for i, (rect, job) in enumerate(self.waitingJobRects.values()):
-            color = (200, 200, 0)
+        for rect, job in self.waitingJobRects.values():
+            color = (200, 200, 0) if job not in self.rejectedList else (200, 0, 0)
             pg.draw.rect(self.screen, color, rect)
             pg.draw.rect(self.screen, (0, 0, 0), rect, 2)
 

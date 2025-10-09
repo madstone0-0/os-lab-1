@@ -9,6 +9,9 @@ class Job:
     time: int
     size: int
 
+    def __hash__(self) -> int:
+        return self.id
+
 
 @dataclass
 class Block:
@@ -77,6 +80,12 @@ class Alloc:
         res = self.firstFit(tick, job)
         self.freeList = oldFreeList
         return res
+
+    def canAllocate(self, job: Job) -> bool:
+        for block in [*self.freeList, *self.busyList]:
+            if self.ram[block].size >= job.size:
+                return True
+        return False
 
     def deallocate(self, tick: int) -> None:
         toRemove = []
