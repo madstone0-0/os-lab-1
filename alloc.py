@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from collections import defaultdict, deque
 from typing import Deque
+from statistics import mean, median
 
 
 @dataclass
@@ -51,6 +52,12 @@ class Alloc:
         self.ram: dict[int, Block] = dict()
         self.blockUsage: dict[int, int] = defaultdict(int)
         self.usageStats: dict[str, str] = dict()
+        # Storage utilization tracking
+        self.totalMemoryUsed: int = 0  # Sum of block sizes that were allocated at least once
+        self.usedBlocks: set[int] = set()  # Track which blocks were used at least once
+        # Internal fragmentation tracking
+        self.totalFragmentation: int = 0  # Running sum of wasted space
+        self.totalJobMemory: int = 0  # Sum of all job sizes allocated
         for i, size in enumerate(sizes):
             idx = i + 1
             self.ram[idx] = Block(id=idx, size=size)
@@ -67,6 +74,17 @@ class Alloc:
                 self.busyList.add(idx)
                 self.ram[idx] = block
                 self.blockUsage[idx] += 1
+                
+                # Track memory utilization (first time this block is used)
+                if idx not in self.usedBlocks:
+                    self.totalMemoryUsed += block.size
+                    self.usedBlocks.add(idx)
+                
+                # Track internal fragmentation
+                fragmentation = block.size - job.size
+                self.totalFragmentation += fragmentation
+                self.totalJobMemory += job.size
+                
                 return True
         return False
 
@@ -97,10 +115,134 @@ class Alloc:
             lines += [str(block)]
         return "\n".join(lines)
 
+    def calcStorageUtilization(self) -> dict[str, any]:
+        """Calculate storage utilization metrics using adaptive thresholds based on actual usage patterns."""
+        totalBlocks = len(self.ram)
+        
+        # Get usage counts for all blocks
+        neverUsedBlocks = []
+        usedBlocks = []
+        
+        # Loop through ALL blocks in ram (not just ones in blockUsage dict)
+        for blockId in self.ram.keys():
+            usageCount = self.blockUsage[blockId]  # defaultdict(int) returns 0 if never accessed
+            
+            if usageCount == 0:
+                neverUsedBlocks.append(blockId)
+            else:
+                usedBlocks.append((blockId, usageCount))
+        
+        # Calculate adaptive thresholds based on actual usage patterns
+        if usedBlocks:
+            usageCounts = [count for _, count in usedBlocks]
+            meanUsage = mean(usageCounts)
+            medianUsage = median(usageCounts)
+            
+            # Define "heavily used" as above mean usage (adaptive threshold)
+            heavily_used_threshold = max(1, int(meanUsage))
+        else:
+            meanUsage = 0
+            medianUsage = 0
+            heavily_used_threshold = 1
+        
+        # Categorize blocks using adaptive thresholds
+        lightlyUsedBlocks = []
+        heavilyUsedBlocks = []
+        
+        for blockId, usageCount in usedBlocks:
+            if usageCount >= heavily_used_threshold:
+                heavilyUsedBlocks.append((blockId, usageCount))
+            else:
+                lightlyUsedBlocks.append((blockId, usageCount))
+        
+        # Calculate percentages
+        neverUsedPercentage = (len(neverUsedBlocks) / totalBlocks) * 100 if totalBlocks > 0 else 0
+        lightlyUsedPercentage = (len(lightlyUsedBlocks) / totalBlocks) * 100 if totalBlocks > 0 else 0
+        heavilyUsedPercentage = (len(heavilyUsedBlocks) / totalBlocks) * 100 if totalBlocks > 0 else 0
+        
+        # Find most used block (highest count)
+        mostUsedBlock = max(usedBlocks, key=lambda x: x[1]) if usedBlocks else None
+        
+        # Find least used block (lowest count > 0)
+        leastUsedBlock = min(usedBlocks, key=lambda x: x[1]) if usedBlocks else None
+        
+        # Calculate memory utilization percentage
+        memoryUtilizationPercentage = (self.totalMemoryUsed / self.totalMemory) * 100 if self.totalMemory > 0 else 0
+        
+        return {
+            "never_used_blocks": neverUsedBlocks,
+            "lightly_used_blocks": lightlyUsedBlocks,
+            "heavily_used_blocks": heavilyUsedBlocks,
+            "never_used_percentage": neverUsedPercentage,
+            "lightly_used_percentage": lightlyUsedPercentage,
+            "heavily_used_percentage": heavilyUsedPercentage,
+            "most_used_block": mostUsedBlock,
+            "least_used_block": leastUsedBlock,
+            "total_memory_used": self.totalMemoryUsed,
+            "total_memory_available": self.totalMemory,
+            "memory_utilization_percentage": memoryUtilizationPercentage,
+            "heavily_used_threshold": heavily_used_threshold,
+            "mean_usage": meanUsage,
+            "median_usage": medianUsage
+        }
+
+    def calcInternalFragmentation(self) -> dict[str, any]:
+        """Calculate internal fragmentation metrics."""
+        # Calculate fragmentation percentage
+        totalAllocatedMemory = self.totalJobMemory + self.totalFragmentation
+        fragmentationPercentage = (self.totalFragmentation / totalAllocatedMemory) * 100 if totalAllocatedMemory > 0 else 0
+        
+        return {
+            "total_fragmentation": self.totalFragmentation,
+            "total_job_memory": self.totalJobMemory,
+            "total_allocated_memory": totalAllocatedMemory,
+            "fragmentation_percentage": fragmentationPercentage
+        }
+
     def calcStats(self) -> dict[str, str]:
         sortedUsage = sorted(self.blockUsage.items(), key=lambda tup: tup[1])
         if len(sortedUsage) != 0:
             self.usageStats[LEAST_USED_BLOCK] = sortedUsage[0][0]
+        
+        # Add storage utilization stats with meaningful thresholds
+        storageStats = self.calcStorageUtilization()
+        
+        # Basic utilization metrics
+        self.usageStats["% Never Used"] = f"{storageStats['never_used_percentage']:.1f}%"
+        self.usageStats["% Lightly Used"] = f"{storageStats['lightly_used_percentage']:.1f}%"
+        self.usageStats["% Heavily Used"] = f"{storageStats['heavily_used_percentage']:.1f}%"
+        self.usageStats["Memory Used"] = f"{storageStats['total_memory_used']}K/{storageStats['total_memory_available']}K"
+        self.usageStats["Memory Util %"] = f"{storageStats['memory_utilization_percentage']:.1f}%"
+        self.usageStats["Heavy Threshold"] = f"≥{storageStats['heavily_used_threshold']} allocs (mean: {storageStats['mean_usage']:.1f})"
+        
+        # Detailed block information
+        if storageStats['never_used_blocks']:
+            never_used_str = ", ".join([f"Block {bid}" for bid in storageStats['never_used_blocks']])
+            self.usageStats["Never Used Blocks"] = never_used_str
+        
+        if storageStats['lightly_used_blocks']:
+            lightly_used_str = ", ".join([f"Block {bid}({count}x)" for bid, count in storageStats['lightly_used_blocks']])
+            self.usageStats["Lightly Used Blocks"] = lightly_used_str
+        
+        if storageStats['heavily_used_blocks']:
+            heavily_used_str = ", ".join([f"Block {bid}({count}x)" for bid, count in storageStats['heavily_used_blocks']])
+            self.usageStats["Heavily Used Blocks"] = heavily_used_str
+        
+        # Most/least used for context
+        if storageStats['most_used_block']:
+            blockId, count = storageStats['most_used_block']
+            self.usageStats["Most Used Block"] = f"Block {blockId} ({count}x)"
+        
+        if storageStats['least_used_block']:
+            blockId, count = storageStats['least_used_block']
+            self.usageStats["Least Used Block"] = f"Block {blockId} ({count}x)"
+        
+        # Add internal fragmentation stats
+        fragStats = self.calcInternalFragmentation()
+        self.usageStats["Total Fragmentation"] = f"{fragStats['total_fragmentation']}K"
+        self.usageStats["Fragmentation %"] = f"{fragStats['fragmentation_percentage']:.1f}%"
+        self.usageStats["Total Job Memory"] = f"{fragStats['total_job_memory']}K"
+        
         return self.usageStats
 
     def printState(self) -> None:
@@ -166,6 +308,14 @@ if __name__ == "__main__":
         print()
         tick += 1
         if len(alloc.busyList) == 0 and len(jobs) == 0:
+            # Print final statistics
+            print("\n" + "="*60)
+            print("FINAL SIMULATION STATISTICS")
+            print("="*60)
+            stats = alloc.calcStats()
+            for stat, value in stats.items():
+                print(f"{stat}: {value}")
+            print("="*60)
             break
 
     # tick = 0
