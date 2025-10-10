@@ -6,13 +6,13 @@ from collections import defaultdict
 
 pg.init()
 
-SCREEN_HEIGHT = 600
-SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 800
+SCREEN_WIDTH = 1000
 BOUND_HEIGHT = SCREEN_HEIGHT
-BOUND_WIDTH = SCREEN_WIDTH - 300
+BOUND_WIDTH = SCREEN_WIDTH - 400
 
-TICK_UPDATE_INTERVAL_MS = 1000
-CHANGE_SCHEME_DELAY_MS = 5000
+TICK_UPDATE_INTERVAL_MS = 500
+CHANGE_SCHEME_DELAY_MS = 0
 
 schemes = ["First Fit", "Best Fit"]
 
@@ -26,11 +26,11 @@ class Anim:
         self.simRunning = True
         self.displayTick = 0
         self.tick = 0
-        self.changeSchemeTimer = pg.time.get_ticks()
         self.displayTick = 0
         self.schemeText = self.font.render(
             f"Scheme: {schemes[self.scheme]}", True, (0, 0, 0)
         )
+        self.finishedTime = None
         self.statusText = []
         self.jobs = makeJobQueue(
             (
@@ -79,6 +79,9 @@ class Anim:
         self.waitingJobRects: dict[int, tuple[pg.Rect, Any]] = {}
         self.jobHeight = BOUND_HEIGHT // max(1, len(self.jobs))
         self.rejectedList: Set[Job] = set()
+        self.jobQueueWaitTime: dict[int, int] = {job.id: 0 for job in self.jobs}
+        self.totalWait = 0
+        self.waitCount = 0
         self.drawInitialRAM()
         self.relayoutWaitingJobs()
 
@@ -99,14 +102,16 @@ class Anim:
         self.smallFont = pg.font.SysFont("Arial", 12)
         self.vel = pg.math.Vector2(1, 1)
         self.textX = BOUND_WIDTH + 10
-        self.textY = SCREEN_HEIGHT - BOUND_HEIGHT + 50
+        self.textY = SCREEN_HEIGHT - BOUND_HEIGHT + 30
 
         self.statuStextX = BOUND_WIDTH + 10
-        self.statuStextY = SCREEN_HEIGHT - BOUND_HEIGHT + 100
+        self.statuStextY = SCREEN_HEIGHT - BOUND_HEIGHT + 30
 
         self.tick = 0
         self.text = self.font.render(
-            f"Tick: {self.tick} | Allocated: 0 | Jobs: 0", True, (0, 0, 0)
+            f"Tick: {self.tick} ({TICK_UPDATE_INTERVAL_MS}ms per tick) | Allocated: 0 | Jobs: 0",
+            True,
+            (0, 0, 0),
         )
 
         self.reset()
@@ -162,13 +167,20 @@ class Anim:
                 job = self.jobs.popleft()
                 if self.scheme == 1:
                     alloced = self.alloc.bestFit(self.tick, job)
+                    wait = self.tick - self.jobQueueWaitTime.pop(job.id, self.tick)
+                    self.totalWait += wait
+                    self.waitCount += 1
                 else:
                     alloced = self.alloc.firstFit(self.tick, job)
+                    wait = self.tick - self.jobQueueWaitTime.pop(job.id, self.tick)
+                    self.totalWait += wait
+                    self.waitCount += 1
 
                 if not alloced:
                     # If allocation failed and allocation is still possible, re-add the job to the back of the queue
                     if self.alloc.canAllocate(job):
                         self.jobs.appendleft(job)
+                        self.jobQueueWaitTime[job.id] = self.tick
                     # Else add to rejected list
                     else:
                         self.rejectedList.add(job)
@@ -181,17 +193,26 @@ class Anim:
                 f"Scheme: {schemes[self.scheme]}", True, (0, 0, 0)
             )
             self.text = self.font.render(
-                f"Tick: {self.tick} | Allocated: {len(self.alloc.busyList)} | Jobs: {len(self.jobs)}",
+                f"Tick: {self.tick} ({TICK_UPDATE_INTERVAL_MS / 1000}s / tick) | Allocated: {len(self.alloc.busyList)} | Jobs: {len(self.jobs)}",
                 True,
                 (0, 0, 0),
             )
             self.statusText = []
             usageStats = self.alloc.calcStats()
+            usageStats["Waiting Queue Length"] = len(self.jobs)
+            avgWait = self.totalWait / max(1, self.waitCount)
+            usageStats["Average Job Queue Wait Time"] = f"{avgWait:.2f} ticks"
             self.statusText += [self.font.render("", True, (0, 0, 0))]
             for stat, val in usageStats.items():
-                self.statusText += [
-                    self.font.render(f"{stat} -> {val}", True, (0, 0, 0))
-                ]
+                if isinstance(val, str):
+                    self.statusText += [
+                        self.font.render(f"{stat} -> {val}", True, (0, 0, 0))
+                    ]
+                elif isinstance(val, list):
+                    self.statusText += [self.font.render(f"{stat} ->", True, (0, 0, 0))]
+                    for v in val:
+                        self.statusText += [self.font.render(f"  {v}", True, (0, 0, 0))]
+
             self.statusText += [
                 self.font.render(
                     f"Runs: {self.runs}",
@@ -219,13 +240,21 @@ class Anim:
                         ]
 
             if len(self.jobs) == 0 and len(self.alloc.busyList) == 0 and self.tick > 0:
-                stats = self.schemeStats[schemes[self.scheme]]
-                stats["ticks taken run " + str(self.runs + 1)] = self.tick
-                totalTicks = sum(
-                    v for k, v in stats.items() if k.startswith("ticks taken run")
-                )
-                stats["average ticks taken"] = totalTicks / (self.runs + 1)
-                if t0 - self.changeSchemeTimer >= CHANGE_SCHEME_DELAY_MS:
+                if self.finishedTime is None:
+                    self.finishedTime = t0
+
+                if t0 - self.finishedTime >= CHANGE_SCHEME_DELAY_MS:
+                    stats = self.schemeStats[schemes[self.scheme]]
+                    stats["ticks taken run " + str(self.runs + 1)] = self.tick
+                    totalTicks = sum(
+                        v for k, v in stats.items() if k.startswith("ticks taken run")
+                    )
+                    stats["Average Throughput"] = float(
+                        usageStats["Throughput (jobs/tick)"]
+                    ) / (self.runs + 1)
+                    stats["Average Ticks Taken"] = totalTicks / (self.runs + 1)
+                    stats["Average Job Queue Wait Time"] = avgWait
+
                     if self.scheme == 1:
                         self.runs += 1
 
@@ -233,6 +262,7 @@ class Anim:
                     self.scheme = not self.scheme
                     self.reset()
                     self.simRunning = True
+                    self.finishedTime = None
 
             if len(self.waitingJobRects) != len(self.jobs):
                 self.relayoutWaitingJobs()
@@ -286,7 +316,7 @@ class Anim:
             self.screen.blit(label, (int(lx), int(ly)))
 
         pg.draw.rect(self.screen, (255, 255, 255), self.bg)
-        self.screen.blit(self.schemeText, (self.textX, self.textY - 30))
+        self.screen.blit(self.schemeText, (self.textX, self.textY - 20))
         self.screen.blit(self.text, (self.textX, self.textY))
         for i, line in enumerate(self.statusText):
             self.screen.blit(line, (self.statuStextX, self.statuStextY + i * 20))
