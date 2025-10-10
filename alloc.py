@@ -90,7 +90,7 @@ class Alloc:
         return False
 
     def bestFit(self, tick: int, job: Job) -> bool:
-        sortedBlocks = set(sorted(self.freeList, key=lambda idx: self.ram[idx].size))
+        sortedBlocks = sorted(self.freeList, key=lambda idx: self.ram[idx].size)
         oldFreeList = self.freeList
         self.freeList = sortedBlocks
         res = self.firstFit(tick, job)
@@ -387,4 +387,3 @@ if __name__ == "__main__":
     #     tick += 1
     #     if len(alloc.busyList) == 0 and len(jobs) == 0:
     #         break
-
